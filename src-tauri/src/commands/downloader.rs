@@ -16,6 +16,15 @@ pub struct DownloadProgress {
     pub total_bytes: u64,
 }
 
+fn default_install_dir() -> String {
+    dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())))
+        .join("sakura-launcher")
+        .join("games")
+        .to_string_lossy()
+        .to_string()
+}
+
 #[tauri::command]
 pub async fn download_game(
     app: AppHandle,
@@ -28,14 +37,23 @@ pub async fn download_game(
     let db_arc = Arc::clone(&db.0);
     let sessions_arc = Arc::clone(&sessions.0);
 
+    let dir = if install_dir.is_empty() {
+        default_install_dir()
+    } else {
+        install_dir
+    };
+
     let url2 = url.clone();
     let game_id2 = game_id.clone();
-    let install_dir2 = install_dir.clone();
     let app2 = app.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = do_download(app2, url2, install_dir2, game_id2, db_arc, sessions_arc).await {
+        if let Err(e) = do_download(app2, url2, dir, game_id2, db_arc, sessions_arc).await {
             eprintln!("Download error: {}", e);
+            app.emit("download-error", &serde_json::json!({
+                "game_id": game_id,
+                "error": e
+            })).ok();
         }
     });
 
@@ -57,6 +75,7 @@ async fn do_download(
         .pool_max_idle_per_host(10)
         .build()
         .map_err(|e| e.to_string())?;
+
     let response = client
         .get(&url)
         .send()
@@ -67,10 +86,17 @@ async fn do_download(
     let mut downloaded: u64 = 0;
     let start_time = std::time::Instant::now();
 
-    // Create temp file
-    let tmp_path = format!("{}/sakura_download_{}.zip", install_dir, game_id);
+    // Ensure install dir exists
     std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
 
+    // Create temp file
+    let ext = std::path::Path::new(&url)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("zip")
+        .to_lowercase();
+
+    let tmp_path = format!("{}/sakura_download_{}.{}", install_dir, game_id, ext);
     let mut file = tokio::fs::File::create(&tmp_path)
         .await
         .map_err(|e| e.to_string())?;
@@ -104,21 +130,30 @@ async fn do_download(
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
 
-    // Extract zip
-    let zip_path = tmp_path.clone();
-    let out_dir = install_dir.clone();
+    // Extract based on file type
     let game_id_clone = game_id.clone();
+    let tmp_path2 = tmp_path.clone();
+    let out_dir = install_dir.clone();
 
-    tokio::task::spawn_blocking(move || {
-        extract_zip(&zip_path, &out_dir)
+    let extract_result = tokio::task::spawn_blocking(move || {
+        match ext.as_str() {
+            "zip" => extract_zip(&tmp_path2, &out_dir),
+            other => Err(format!("Unsupported archive format: .{}", other)),
+        }
     })
     .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("Extraction task failed: {}", e))?;
 
-    // Remove zip
+    if let Err(e) = extract_result {
+        // Keep the downloaded file so user can extract manually
+        eprintln!("Extraction error: {}", e);
+        return Err(format!("Extraction failed: {}", e));
+    }
+
+    // Remove the archive after successful extraction
     tokio::fs::remove_file(&tmp_path).await.ok();
 
+    // Emit complete
     app.emit("download-complete", &serde_json::json!({ "game_id": game_id_clone })).ok();
 
     Ok(())

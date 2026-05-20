@@ -80,10 +80,19 @@ export default function App() {
       }
     );
 
+    const unlistenError = listen<{ game_id: string; error: string }>(
+      "download-error",
+      (event) => {
+        removeDownloadProgress(event.payload.game_id);
+        console.error(`Download failed for ${event.payload.game_id}: ${event.payload.error}`);
+      }
+    );
+
     return () => {
       unlistenProgress.then((f) => f());
       unlistenComplete.then((f) => f());
       unlistenExited.then((f) => f());
+      unlistenError.then((f) => f());
     };
   }, []);
 
