@@ -1,8 +1,9 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { LayoutGrid, List, SortAsc, Play, FolderOpen, Edit, Trash2, ScanSearch } from "lucide-react";
+import { LayoutGrid, List, SortAsc, Play, FolderOpen, Edit, Trash2, ScanSearch, Scan } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { open } from "@tauri-apps/plugin-shell";
+import { open as openFolder } from "@tauri-apps/plugin-shell";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import GameCard from "../components/GameCard";
 import SearchBar from "../components/SearchBar";
 import PetalAnimation from "../components/PetalAnimation";
@@ -30,12 +31,14 @@ interface ContextMenu {
 export default function Library() {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { games, removeGame, launchGame } = useGameStore();
+  const { games, removeGame, launchGame, scanGames } = useGameStore();
   const [view, setView] = useState<"grid" | "list">("grid");
   const [search, setSearch] = useState("");
   const [selectedGenre, setSelectedGenre] = useState("All");
   const [sort, setSort] = useState("title");
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close context menu on outside click
@@ -92,7 +95,7 @@ export default function Library() {
   const handleOpenFolder = async (game: Game) => {
     setContextMenu(null);
     if (game.install_dir) {
-      await open(game.install_dir);
+      await openFolder(game.install_dir);
     }
   };
 
@@ -100,6 +103,29 @@ export default function Library() {
     setContextMenu(null);
     if (confirm(`Remove "${game.title}" from library?`)) {
       await removeGame(game.id);
+    }
+  };
+
+  const handleScan = async () => {
+    try {
+      const dir = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select folder with game files or archives",
+      });
+      if (!dir) return;
+
+      setScanning(true);
+      setScanResult(null);
+
+      const found = await scanGames(dir as string);
+      setScanResult(`Found ${found} game${found !== 1 ? "s" : ""}!`);
+      setTimeout(() => setScanResult(null), 4000);
+    } catch (e) {
+      setScanResult(`Scan failed: ${e}`);
+      setTimeout(() => setScanResult(null), 4000);
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -117,8 +143,22 @@ export default function Library() {
         <div className="absolute inset-0 bg-sakura-radial" />
       </div>
 
-      {/* Content */}
+        {/* Content */}
       <div className="relative z-10 flex flex-col h-full">
+        {/* Scan result toast */}
+        <AnimatePresence>
+          {scanResult && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="absolute top-3 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg text-sm font-medium bg-sakura-pink/20 border border-sakura-pink/40 text-sakura-pink backdrop-blur-sm"
+            >
+              {scanResult}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Toolbar */}
         <div className="flex items-center gap-3 px-6 py-4 border-b border-sakura-border bg-sakura-bg/80 backdrop-blur-sm flex-shrink-0">
           <div className="flex-1 max-w-xs">
@@ -140,6 +180,17 @@ export default function Library() {
               ))}
             </select>
           </div>
+
+          {/* Scan */}
+          <button
+            onClick={handleScan}
+            disabled={scanning}
+            className="sakura-btn-ghost h-9 px-2.5 flex items-center gap-1.5 text-xs"
+            title="Scan folder for games"
+          >
+            <Scan size={14} className={scanning ? "animate-pulse" : ""} />
+            {scanning ? "Scanning..." : "Scan"}
+          </button>
 
           {/* View toggle */}
           <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1">

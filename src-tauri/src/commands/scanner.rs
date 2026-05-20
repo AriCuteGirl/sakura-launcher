@@ -1,6 +1,7 @@
 use crate::models::game::Game;
 use crate::DbState;
 use chrono::Utc;
+use std::process::Command;
 use tauri::State;
 use uuid::Uuid;
 
@@ -10,21 +11,19 @@ const EXE_EXCLUDE: &[&str] = &[
     "unins", "uninstall", "setup", "install", "redist", "vcredist",
     "directx", "crash", "report", "launcher_old",
 ];
+const ARCHIVE_EXTS: &[&str] = &["zip", "rar", "7z"];
 
 fn is_game_exe(name: &str) -> bool {
     let lower = name.to_lowercase();
-    // Check it has a recognized extension or no extension (Linux binaries)
     let has_ext = EXE_EXTENSIONS.iter().any(|ext| lower.ends_with(&format!(".{}", ext)));
     let no_ext_executable = !lower.contains('.');
     if !has_ext && !no_ext_executable {
         return false;
     }
-    // Exclude known non-game executables
     !EXE_EXCLUDE.iter().any(|ex| lower.contains(ex))
 }
 
 fn find_main_exe(dir: &std::path::Path) -> Option<String> {
-    // Walk up to 2 levels deep, find the most likely game executable
     let mut candidates: Vec<(usize, String)> = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -33,7 +32,6 @@ fn find_main_exe(dir: &std::path::Path) -> Option<String> {
             let name = entry.file_name().to_string_lossy().to_string();
 
             if path.is_file() && is_game_exe(&name) {
-                // Prefer executables that match the parent folder name
                 let folder_name = dir
                     .file_name()
                     .map(|n| n.to_string_lossy().to_lowercase())
@@ -41,7 +39,6 @@ fn find_main_exe(dir: &std::path::Path) -> Option<String> {
                 let score = if name.to_lowercase().contains(&folder_name) { 10 } else { 1 };
                 candidates.push((score, path.to_string_lossy().to_string()));
             } else if path.is_dir() {
-                // One level deeper
                 if let Ok(sub_entries) = std::fs::read_dir(&path) {
                     for sub_entry in sub_entries.flatten() {
                         let sub_path = sub_entry.path();
@@ -60,13 +57,10 @@ fn find_main_exe(dir: &std::path::Path) -> Option<String> {
 }
 
 fn dir_to_title(name: &str) -> String {
-    // Convert folder name to readable title
-    // e.g. "dark_souls_3" -> "Dark Souls 3", "MyGame-v1.2" -> "MyGame"
     let cleaned = name
         .replace(['-', '_'], " ")
         .replace(['(', ')', '[', ']'], "");
 
-    // Remove version patterns like v1.2, v2.0.1
     let re_words: Vec<&str> = cleaned
         .split_whitespace()
         .filter(|w| {
@@ -90,6 +84,113 @@ fn dir_to_title(name: &str) -> String {
         .to_string()
 }
 
+fn extract_archive(archive_path: &str, out_dir: &str) -> Result<(), String> {
+    let path = std::path::Path::new(archive_path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        "zip" => extract_zip(archive_path, out_dir),
+        "rar" => extract_rar(archive_path, out_dir),
+        "7z" => extract_7z(archive_path, out_dir),
+        _ => Err(format!("Unsupported archive format: .{}", ext)),
+    }
+}
+
+fn extract_zip(zip_path: &str, out_dir: &str) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    // Check if all files are inside a single root dir
+    let root_dir = find_common_root(&archive);
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let entry_name = entry.name().to_string();
+
+        // If there's a common root, strip it
+        let rel_path = if let Some(ref root) = root_dir {
+            entry_name.strip_prefix(root).unwrap_or(&entry_name)
+        } else {
+            &entry_name
+        };
+
+        let outpath = std::path::Path::new(out_dir).join(rel_path);
+
+        if entry.is_dir() {
+            std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn find_common_root(archive: &zip::ZipArchive<std::fs::File>) -> Option<String> {
+    let names: Vec<&str> = archive.file_names().collect();
+    if names.is_empty() {
+        return None;
+    }
+
+    // If any file is at root level (no /), there's no single root
+    let all_have_root = names.iter().all(|n| n.contains('/'));
+    if !all_have_root {
+        return None;
+    }
+
+    // Get the first directory component of each path
+    let roots: std::collections::HashSet<&str> = names
+        .iter()
+        .filter_map(|n| n.split('/').next())
+        .collect();
+
+    if roots.len() == 1 {
+        roots.into_iter().next().map(|r| format!("{}/", r))
+    } else {
+        None
+    }
+}
+
+fn extract_rar(rar_path: &str, out_dir: &str) -> Result<(), String> {
+    // Try system unrar, then unrar-free
+    for cmd in &["unrar", "unrar-free"] {
+        if let Ok(output) = Command::new(cmd)
+            .args(["x", "-o+", rar_path, out_dir])
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+            // Failed but command exists — don't try another
+            return Err(format!("{} failed: {}", cmd, String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    Err("No RAR extractor found (install unrar)".to_string())
+}
+
+fn extract_7z(seven_z_path: &str, out_dir: &str) -> Result<(), String> {
+    for cmd in &["7z", "7za", "7zr"] {
+        if let Ok(output) = Command::new(cmd)
+            .args(["x", seven_z_path, format!("-o{}", out_dir).as_str(), "-aoa"])
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+            return Err(format!("{} failed: {}", cmd, String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    Err("No 7z extractor found (install p7zip)".to_string())
+}
+
 #[tauri::command]
 pub fn scan_games(state: State<DbState>, scan_dir: String) -> Result<Vec<Game>, String> {
     let base = std::path::Path::new(&scan_dir);
@@ -97,7 +198,6 @@ pub fn scan_games(state: State<DbState>, scan_dir: String) -> Result<Vec<Game>, 
         return Err(format!("Directory does not exist: {}", scan_dir));
     }
 
-    // Get existing game install dirs so we don't duplicate
     let existing_dirs: Vec<String> = {
         let conn = state.0.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
@@ -131,56 +231,109 @@ pub fn scan_games(state: State<DbState>, scan_dir: String) -> Result<Vec<Game>, 
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path_str = path.to_string_lossy().to_string();
+
+        if path.is_dir() {
+            // --- Scan existing game folder ---
+            if existing_dirs.iter().any(|d| d == &path_str) {
+                continue;
+            }
+
+            let exe_path = find_main_exe(&path).unwrap_or_default();
+
+            if !exe_path.is_empty() && existing_exes.iter().any(|e| e == &exe_path) {
+                continue;
+            }
+
+            let title = dir_to_title(&name);
+            if title.is_empty() {
+                continue;
+            }
+
+            new_games.push(Game {
+                id: Uuid::new_v4().to_string(),
+                title,
+                description: String::new(),
+                genre: Vec::new(),
+                cover_url: String::new(),
+                banner_url: String::new(),
+                screenshots: Vec::new(),
+                exe_path,
+                install_dir: path_str,
+                bunnycdn_download_url: None,
+                playtime_seconds: 0,
+                last_played: None,
+                date_added: now.clone(),
+                developer: String::new(),
+                tags: Vec::new(),
+                achievement_count: 0,
+                achievements_unlocked: 0,
+            });
+        } else if path.is_file() {
+            // --- Scan archive file (.zip, .rar, .7z) ---
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+
+            if !ARCHIVE_EXTS.contains(&ext.as_str()) {
+                continue;
+            }
+
+            // Derive title from archive name
+            let stem = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&name);
+            let title = dir_to_title(stem);
+            if title.is_empty() {
+                continue;
+            }
+
+            // Extract to a folder named after the archive
+            let extract_dir = format!("{}/{}", scan_dir, stem);
+
+            // Skip if already extracted
+            if existing_dirs.iter().any(|d| d == &extract_dir) {
+                continue;
+            }
+
+            // Create and extract
+            std::fs::create_dir_all(&extract_dir).ok();
+            if let Err(e) = extract_archive(&path_str, &extract_dir) {
+                eprintln!("Failed to extract {}: {}", name, e);
+                // Still add as a game with the archive as a marker
+                // so the user can re-extract later
+            }
+
+            // Find the game exe in extracted folder
+            let extract_path = std::path::Path::new(&extract_dir);
+            let exe_path = find_main_exe(extract_path).unwrap_or_default();
+
+            if !exe_path.is_empty() && existing_exes.iter().any(|e| e == &exe_path) {
+                continue;
+            }
+
+            new_games.push(Game {
+                id: Uuid::new_v4().to_string(),
+                title,
+                description: String::new(),
+                genre: Vec::new(),
+                cover_url: String::new(),
+                banner_url: String::new(),
+                screenshots: Vec::new(),
+                exe_path,
+                install_dir: extract_dir,
+                bunnycdn_download_url: None,
+                playtime_seconds: 0,
+                last_played: None,
+                date_added: now.clone(),
+                developer: String::new(),
+                tags: Vec::new(),
+                achievement_count: 0,
+                achievements_unlocked: 0,
+            });
         }
-
-        let install_dir = path.to_string_lossy().to_string();
-
-        // Skip already-imported dirs
-        if existing_dirs.iter().any(|d| d == &install_dir) {
-            continue;
-        }
-
-        // Try to find main executable
-        let exe_path = find_main_exe(&path).unwrap_or_default();
-
-        // Skip if this exe is already tracked
-        if !exe_path.is_empty() && existing_exes.iter().any(|e| e == &exe_path) {
-            continue;
-        }
-
-        let folder_name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
-        let title = dir_to_title(&folder_name);
-
-        if title.is_empty() {
-            continue;
-        }
-
-        let game = Game {
-            id: Uuid::new_v4().to_string(),
-            title,
-            description: String::new(),
-            genre: Vec::new(),
-            cover_url: String::new(),
-            banner_url: String::new(),
-            screenshots: Vec::new(),
-            exe_path,
-            install_dir,
-            bunnycdn_download_url: None,
-            playtime_seconds: 0,
-            last_played: None,
-            date_added: now.clone(),
-            developer: String::new(),
-            tags: Vec::new(),
-            achievement_count: 0,
-            achievements_unlocked: 0,
-        };
-
-        new_games.push(game);
     }
 
     // Auto-save all found games to DB
