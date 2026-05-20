@@ -1,0 +1,10 @@
+pub mod achievements;
+pub mod catalog;
+pub mod downloader;
+pub mod friends;
+pub mod games;
+pub mod launcher;
+pub mod metadata;
+pub mod playtime;
+pub mod scanner;
+pub mod settings;
