@@ -56,11 +56,30 @@ export default function Browse() {
   const loadCatalog = async () => {
     setLoading(true);
     setError(null);
+
+    // Try remote catalog URL from settings if configured
+    try {
+      const settings = await invoke<any>("load_settings");
+      if (settings?.catalog_url) {
+        const result = await invoke<Catalog>("fetch_remote_catalog", { url: settings.catalog_url });
+        setCatalog(result);
+        setLoading(false);
+        return;
+      }
+    } catch {}
+
     try {
       const result = await invoke<Catalog>("fetch_catalog", { baseUrl: "" });
       setCatalog(result);
     } catch (e) {
-      setError(String(e));
+      // Fallback: try default GitHub Pages catalog
+      try {
+        const defaultUrl = "https://aricutegirl.github.io/Catalog/catalog.json";
+        const result = await invoke<Catalog>("fetch_remote_catalog", { url: defaultUrl });
+        setCatalog(result);
+      } catch {
+        setError(String(e));
+      }
     } finally {
       setLoading(false);
     }
@@ -69,6 +88,30 @@ export default function Browse() {
   useEffect(() => {
     loadCatalog();
   }, []);
+
+  // Auto-fetch RAWG covers for games without cover_url
+  useEffect(() => {
+    if (!catalog?.games) return;
+    (async () => {
+      try {
+        const settings = await invoke<any>("load_settings");
+        if (!settings?.rawg_api_key) return;
+        for (const cg of catalog.games) {
+          if (!cg.cover_url && !rawgCovers[cg.id]) {
+            try {
+              const meta = await invoke<RawgMeta>("fetch_game_metadata", {
+                title: cg.title,
+                rawgApiKey: settings.rawg_api_key,
+              });
+              if (meta?.cover_url) {
+                setRawgCovers(prev => ({ ...prev, [cg.id]: meta.cover_url! }));
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    })();
+  }, [catalog]);
 
   const handleDownload = async (cg: CatalogGame) => {
     // Add to library first
@@ -273,13 +316,49 @@ export default function Browse() {
                       {t("inLibrary")}
                     </div>
                   ) : (
-                    <button
-                      onClick={() => handleDownload(cg)}
-                      className="sakura-btn w-full mt-2 text-xs py-1.5 flex items-center justify-center gap-1"
-                    >
-                      <Download size={12} />
-                      {t("install")}
-                    </button>
+                    cg.download_url.includes("filen.io") ? (
+                      <div className="flex flex-col gap-1.5 mt-2">
+                        <button
+                          onClick={() => invoke("open_filen_download", { url: cg.download_url })}
+                          className="sakura-btn text-xs py-1.5 flex items-center justify-center gap-1 bg-gradient-to-r from-blue-500/30 to-purple-500/30"
+                        >
+                          <Download size={12} />
+                          Open Download Page
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const { open } = await import("@tauri-apps/plugin-dialog");
+                            const file = await open({
+                              multiple: false,
+                              filters: [{ name: "Archives", extensions: ["zip", "7z", "rar"] }],
+                            });
+                            if (file) {
+                              await invoke("import_game_file", {
+                                filePath: file,
+                                gameId: cg.id,
+                                title: cg.title,
+                                downloadUrl: cg.download_url,
+                                coverUrl: cg.cover_url,
+                                developer: cg.developer,
+                                tags: cg.tags,
+                              });
+                              await loadCatalog();
+                            }
+                          }}
+                          className="sakura-btn-ghost text-[10px] py-1 flex items-center justify-center gap-1"
+                        >
+                          📂 Import File
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleDownload(cg)}
+                        className="sakura-btn w-full mt-2 text-xs py-1.5 flex items-center justify-center gap-1"
+                      >
+                        <Download size={12} />
+                        {t("install")}
+                      </button>
+                    )
                   )}
                 </div>
               </motion.div>

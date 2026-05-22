@@ -3,6 +3,7 @@ use crate::PlaytimeSessions;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_opener::OpenerExt;
 use tokio::io::AsyncWriteExt;
 use std::time::Duration;
 
@@ -159,6 +160,164 @@ async fn do_download(
     Ok(())
 }
 
+/// Open Filen.io download URL in system browser (most reliable)
+#[tauri::command]
+pub async fn open_filen_download(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("Failed to open URL: {e}"))
+}
+
+/// Import a locally downloaded game file (for Filen.io / manual downloads)
+#[tauri::command]
+pub async fn import_game_file(
+    app: AppHandle,
+    db: State<'_, DbState>,
+    file_path: String,
+    game_id: String,
+    title: String,
+    download_url: String,
+    cover_url: String,
+    developer: String,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    // Determine install directory
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let install_dir = format!("{}/Games/{}", home, game_id);
+    std::fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+
+    // Copy file to install dir
+    let ext = std::path::Path::new(&file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("zip")
+        .to_lowercase();
+    let dest_path = format!("{}/game.{}", install_dir, ext);
+    tokio::fs::copy(&file_path, &dest_path)
+        .await
+        .map_err(|e| format!("Failed to copy file: {e}"))?;
+
+    // Extract archive
+    match ext.as_str() {
+        "zip" => {
+            if let Err(e) = extract_zip(&dest_path, &install_dir) {
+                eprintln!("Extraction warning: {e}");
+            } else {
+                tokio::fs::remove_file(&dest_path).await.ok();
+            }
+        }
+        "rar" => {
+            if let Err(e) = extract_rar_cmd(&dest_path, &install_dir) {
+                eprintln!("Extraction warning: {e}");
+            } else {
+                tokio::fs::remove_file(&dest_path).await.ok();
+            }
+        }
+        "7z" => {
+            if let Err(e) = extract_7z_cmd(&dest_path, &install_dir) {
+                eprintln!("Extraction warning: {e}");
+            } else {
+                tokio::fs::remove_file(&dest_path).await.ok();
+            }
+        }
+        _ => {}
+    }
+
+    // Auto-find executable in install dir
+    let exe_path = find_main_exe(std::path::Path::new(&install_dir)).unwrap_or_default();
+
+    // Add game to library
+    let genre_json = "[]";
+    let screenshots_json = "[]";
+    let tags_json = serde_json::to_string(&tags).unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO games (id, title, description, genre, cover_url, banner_url, screenshots,
+             exe_path, install_dir, bunnycdn_download_url, playtime_seconds, last_played,
+             date_added, developer, tags, achievement_count, achievements_unlocked)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            rusqlite::params![
+                game_id,
+                title,
+                "",
+                genre_json,
+                cover_url,
+                "",
+                screenshots_json,
+                exe_path,
+                install_dir,
+                download_url,
+                0_i64,
+                Option::<String>::None,
+                now,
+                developer,
+                tags_json,
+                0_i64,
+                0_i64,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    app.emit("download-complete", &serde_json::json!({ "game_id": game_id }))
+        .ok();
+
+    Ok(())
+}
+
+// Helper: find main executable in a directory (copied from scanner.rs)
+const EXE_EXTENSIONS: &[&str] = &["exe", "sh", "appimage", "bin", "x86_64", "x86"];
+const EXE_EXCLUDE: &[&str] = &[
+    "unins", "uninstall", "setup", "install", "redist", "vcredist",
+    "directx", "crash", "report", "launcher_old",
+];
+
+fn is_game_exe(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let has_ext = EXE_EXTENSIONS.iter().any(|ext| lower.ends_with(&format!(".{}", ext)));
+    let no_ext_executable = !lower.contains('.');
+    if !has_ext && !no_ext_executable {
+        return false;
+    }
+    !EXE_EXCLUDE.iter().any(|ex| lower.contains(ex))
+}
+
+fn find_main_exe(dir: &std::path::Path) -> Option<String> {
+    let mut candidates: Vec<(usize, String)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if path.is_file() && is_game_exe(&name) {
+                let folder_name = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let score = if name.to_lowercase().contains(&folder_name) { 10 } else { 1 };
+                candidates.push((score, path.to_string_lossy().to_string()));
+            } else if path.is_dir() {
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub_entry in sub_entries.flatten() {
+                        let sub_path = sub_entry.path();
+                        let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                        if sub_path.is_file() && is_game_exe(&sub_name) {
+                            candidates.push((0, sub_path.to_string_lossy().to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.into_iter().next().map(|(_, path)| path)
+}
+
 fn extract_zip(zip_path: &str, out_dir: &str) -> Result<(), String> {
     let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -179,4 +338,34 @@ fn extract_zip(zip_path: &str, out_dir: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn extract_rar_cmd(rar_path: &str, out_dir: &str) -> Result<(), String> {
+    for cmd in &["unrar", "unrar-free"] {
+        if let Ok(output) = std::process::Command::new(cmd)
+            .args(["x", "-o+", rar_path, out_dir])
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+            return Err(format!("{} failed: {}", cmd, String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    Err("No RAR extractor found (install unrar)".to_string())
+}
+
+fn extract_7z_cmd(seven_z_path: &str, out_dir: &str) -> Result<(), String> {
+    for cmd in &["7z", "7za", "7zr"] {
+        if let Ok(output) = std::process::Command::new(cmd)
+            .args(["x", seven_z_path, &format!("-o{}", out_dir), "-aoa"])
+            .output()
+        {
+            if output.status.success() {
+                return Ok(());
+            }
+            return Err(format!("{} failed: {}", cmd, String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    Err("No 7z extractor found (install p7zip)".to_string())
 }

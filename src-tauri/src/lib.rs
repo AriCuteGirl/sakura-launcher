@@ -11,19 +11,26 @@ pub mod models;
 
 use commands::{
     achievements::{add_achievement, get_achievements, get_total_unlocked, unlock_achievement},
-    catalog::fetch_catalog,
+    catalog::{fetch_catalog, fetch_remote_catalog},
+    catalog_manager::{add_catalog_game, is_admin_password_set, load_catalog_manager, publish_catalog, remove_catalog_game, verify_admin_password},
     downloader::download_game,
+    downloader::import_game_file,
+    downloader::open_filen_download,
     friends::{add_friend, get_friends, remove_friend, set_online_status},
     games::{add_game, get_all_games, get_game_by_id, remove_game, update_game},
     launcher::launch_game,
+    launcher::stop_game,
     metadata::fetch_game_metadata,
     playtime::{end_session, get_playtime, start_session, update_playtime},
+    s3::{configure_s3, fetch_s3_catalog, generate_s3_download_url, s3_status, S3Client},
     scanner::scan_games,
     settings::{load_settings, save_settings},
+    webdav::fetch_webdav_catalog,
 };
 
 pub struct DbState(pub Arc<Mutex<rusqlite::Connection>>);
 pub struct PlaytimeSessions(pub Arc<Mutex<HashMap<String, std::time::Instant>>>);
+pub struct RunningProcesses(pub Arc<Mutex<HashMap<String, u32>>>);
 
 fn init_db(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -85,6 +92,8 @@ pub fn run() {
 
     let db_state = DbState(Arc::new(Mutex::new(conn)));
     let sessions_state = PlaytimeSessions(Arc::new(Mutex::new(HashMap::new())));
+    let processes_state = RunningProcesses(Arc::new(Mutex::new(HashMap::new())));
+    let s3_state = S3Client::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -92,8 +101,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(db_state)
         .manage(sessions_state)
+        .manage(processes_state)
+        .manage(s3_state)
         .invoke_handler(tauri::generate_handler![
             get_all_games,
             add_game,
@@ -102,11 +114,15 @@ pub fn run() {
             get_game_by_id,
             scan_games,
             fetch_catalog,
+            fetch_remote_catalog,
             fetch_game_metadata,
             load_settings,
             save_settings,
             launch_game,
+            stop_game,
             download_game,
+            import_game_file,
+            open_filen_download,
             start_session,
             end_session,
             update_playtime,
@@ -119,9 +135,47 @@ pub fn run() {
             add_friend,
             remove_friend,
             set_online_status,
+            load_catalog_manager,
+            add_catalog_game,
+            remove_catalog_game,
+            publish_catalog,
+            is_admin_password_set,
+            verify_admin_password,
+            fetch_webdav_catalog,
+            fetch_s3_catalog,
+            configure_s3,
+            s3_status,
+            generate_s3_download_url,
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            // Auto-configure S3 from settings
+            let s3_state: tauri::State<S3Client> = app.state();
+            let settings_path = app.path().app_config_dir().ok().map(|d| d.join("sakura_settings.json"));
+            if let Some(path) = settings_path {
+                if path.exists() {
+                    if let Ok(json) = std::fs::read_to_string(&path) {
+                        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&json) {
+                            let endpoint = settings.get("filen_s3_endpoint").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let region = settings.get("filen_s3_region").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let bucket = settings.get("filen_s3_bucket").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let access_key = settings.get("filen_s3_access_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let secret_key = settings.get("filen_s3_secret_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            if !endpoint.is_empty() && !access_key.is_empty() && !secret_key.is_empty() {
+                                let s3 = s3_state.inner().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = s3.configure(&endpoint, &region, &bucket, &access_key, &secret_key).await {
+                                        eprintln!("S3 auto-config failed: {e}");
+                                    } else {
+                                        eprintln!("S3 auto-configured successfully");
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
 
             // Build tray menu
             let open_i = MenuItem::with_id(app, "open", "Open Sakura", true, None::<&str>)?;

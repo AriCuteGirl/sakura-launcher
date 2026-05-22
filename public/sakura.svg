@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="petalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6eb4;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d63384;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="centerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd166;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f0a500;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Petal 1 - top -->
+  <path d="M256 40 C220 100 160 120 140 160 C120 200 100 220 130 240 C160 260 200 240 220 200 C240 160 260 100 256 40Z" fill="url(#petalGrad)" opacity="0.95"/>
+  <!-- Petal 2 - top right -->
+  <path d="M256 40 C220 100 160 120 140 160 C120 200 100 220 130 240 C160 260 200 240 220 200 C240 160 260 100 256 40Z" fill="url(#petalGrad)" opacity="0.9" transform="rotate(72, 256, 256)"/>
+  <!-- Petal 3 - bottom right -->
+  <path d="M256 40 C220 100 160 120 140 160 C120 200 100 220 130 240 C160 260 200 240 220 200 C240 160 260 100 256 40Z" fill="url(#petalGrad)" opacity="0.85" transform="rotate(144, 256, 256)"/>
+  <!-- Petal 4 - bottom left -->
+  <path d="M256 40 C220 100 160 120 140 160 C120 200 100 220 130 240 C160 260 200 240 220 200 C240 160 260 100 256 40Z" fill="url(#petalGrad)" opacity="0.9" transform="rotate(216, 256, 256)"/>
+  <!-- Petal 5 - top left -->
+  <path d="M256 40 C220 100 160 120 140 160 C120 200 100 220 130 240 C160 260 200 240 220 200 C240 160 260 100 256 40Z" fill="url(#petalGrad)" opacity="0.85" transform="rotate(288, 256, 256)"/>
+  <!-- Flower center -->
+  <circle cx="256" cy="256" r="35" fill="url(#centerGrad)"/>
+  <!-- Center highlight -->
+  <circle cx="248" cy="248" r="14" fill="#ffe066" opacity="0.6"/>
+  <!-- Small stamen dots -->
+  <circle cx="256" cy="210" r="5" fill="#f0a500" opacity="0.8"/>
+  <circle cx="300" cy="250" r="5" fill="#f0a500" opacity="0.8"/>
+  <circle cx="283" cy="295" r="5" fill="#f0a500" opacity="0.8"/>
+  <circle cx="228" cy="295" r="5" fill="#f0a500" opacity="0.8"/>
+  <circle cx="212" cy="250" r="5" fill="#f0a500" opacity="0.8"/>
+</svg>

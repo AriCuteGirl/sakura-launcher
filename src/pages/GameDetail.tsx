@@ -42,7 +42,7 @@ export default function GameDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { games, launchGame, downloadGame, downloads } = useGameStore();
+  const { games, launchGame, downloadGame, downloads, currentlyPlaying, setCurrentlyPlaying, updateGamePlaytime } = useGameStore();
   const catalogGame = (location.state as any)?.catalogGame as CatalogGame | undefined;
   const game = games.find((g) => g.id === id) || catalogGame as any;
 
@@ -111,9 +111,23 @@ export default function GameDetail() {
     await launchGame(game.exe_path, game.id);
   };
 
+  const handleStop = async () => {
+    await invoke("stop_game", { gameId: game.id });
+    setCurrentlyPlaying(null);
+  };
+
+  const isRunning = currentlyPlaying === game?.id;
+
   const handleDownload = async () => {
     const dlUrl = game.bunnycdn_download_url || (game as any).download_url;
     if (!dlUrl) return;
+
+    // Check if it's a Filen.io URL → open embedded webview
+    if (dlUrl.includes("filen.io")) {
+      await invoke("open_filen_download", { url: dlUrl });
+      return;
+    }
+
     let dir = game.install_dir;
     if (!dir) {
       const selected = await open({ directory: true, title: "Choose install directory" });
@@ -231,7 +245,11 @@ export default function GameDetail() {
 
           {/* Action buttons */}
           <div className="flex items-center gap-2 pb-2 flex-shrink-0">
-            {game.exe_path ? (
+            {isRunning ? (
+              <button onClick={handleStop} className="sakura-btn flex items-center gap-2 text-sm px-5 py-2 bg-red-500/20 border-red-500/40 text-white hover:bg-red-500/30">
+                ⏹ Stop
+              </button>
+            ) : game.exe_path ? (
               <>
                 <button
                   onClick={() => navigate(`/edit/${game.id}`)}
@@ -300,7 +318,7 @@ export default function GameDetail() {
           <div className="mb-6">
             <h2 className="text-sm font-semibold text-sakura-muted uppercase tracking-wider mb-2">{t("about")}</h2>
             <p className="text-sakura-text text-sm leading-relaxed">
-              {game.description || rawgData?.description || ""}
+              {(game.description && game.description !== "0") ? game.description : (rawgData?.description || "")}
             </p>
           </div>
         )}
@@ -323,9 +341,9 @@ export default function GameDetail() {
                 </div>
               </div>
             )}
-            <div className="grid grid-cols-3 gap-3">
-              {rawgData.rating && (
-                <div className="glass-card p-3">
+            <div className="flex flex-wrap gap-3">
+              {rawgData.rating ? (
+                <div className="glass-card p-3 min-w-[140px] flex-1">
                   <p className="text-xs text-sakura-muted">{t("rating")}</p>
                   <p className="font-semibold text-sm text-yellow-400">
                     {'★'.repeat(Math.round(rawgData.rating))}
@@ -333,19 +351,19 @@ export default function GameDetail() {
                     {' '}{rawgData.rating.toFixed(1)}
                   </p>
                 </div>
-              )}
-              {rawgData.metacritic && (
-                <div className="glass-card p-3">
+              ) : null}
+              {rawgData.metacritic ? (
+                <div className="glass-card p-3 min-w-[140px] flex-1">
                   <p className="text-xs text-sakura-muted">Metacritic</p>
                   <p className={`font-semibold text-sm ${rawgData.metacritic >= 75 ? 'text-green-400' : rawgData.metacritic >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{rawgData.metacritic}</p>
                 </div>
-              )}
-              {rawgData.release_date && (
-                <div className="glass-card p-3">
+              ) : null}
+              {rawgData.release_date ? (
+                <div className="glass-card p-3 min-w-[140px] flex-1">
                   <p className="text-xs text-sakura-muted">Released</p>
                   <p className="font-semibold text-sm text-sakura-text">{rawgData.release_date}</p>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}

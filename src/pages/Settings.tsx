@@ -16,6 +16,12 @@ interface AppSettings {
   language: string;
   goldberg_path?: string;
   rawg_api_key?: string;
+  catalog_url?: string;
+  github_token?: string;
+  github_owner?: string;
+  github_repo?: string;
+  github_path?: string;
+  github_branch?: string;
 }
 
 const defaults: AppSettings = {
@@ -389,6 +395,19 @@ export default function Settings() {
           </div>
 
           <div>
+            <label className="block text-xs font-semibold text-sakura-muted uppercase tracking-wider mb-1.5">Catalog URL</label>
+            <input
+              className="sakura-input"
+              placeholder="https://aricutegirl.github.io/Catalog/catalog.json"
+              value={settings.catalog_url ?? ''}
+              onChange={(e) => set('catalog_url', e.target.value || undefined)}
+            />
+            <p className="text-xs text-sakura-muted mt-1">
+              Remote catalog.json URL (GitHub Pages, Filen.io, etc.). Shows games in Browse tab.
+            </p>
+          </div>
+
+          <div>
             <label className="block text-xs font-semibold text-sakura-muted uppercase tracking-wider mb-1.5">{t("language", lang)}</label>
             <select value={settings.language} onChange={(e) => set("language", e.target.value)} className="sakura-input w-auto">
               <option value="en">English</option>
@@ -429,6 +448,11 @@ export default function Settings() {
             onChange={(e) => set('rawg_api_key', e.target.value || undefined)}
           />
         </section>
+
+        {/* Admin unlock — hidden in plain sight */}
+        <div className="mb-4">
+          <AdminUnlock />
+        </div>
 
         <section className="glass-card p-5 mb-4 space-y-4">
           <h2 className="text-sm font-semibold text-sakura-pink uppercase tracking-wider">{t("appearance", lang)}</h2>
@@ -475,9 +499,47 @@ export default function Settings() {
 
         <div className="flex items-center justify-center gap-2 mt-6 text-xs text-sakura-muted">
           <Info size={12} />
-          <span>Sakura Launcher v0.1.0 · {games.length} {t("version", lang)}</span>
+          <span>Sakura Launcher v0.2.0 · {games.length} {t("version", lang)}</span>
         </div>
       </div>
     </motion.div>
+  );
+}
+
+/* ── Admin Unlock (tiny, in Settings) ── */
+function AdminUnlock() {
+  const [input, setInput] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const handleUnlock = async () => {
+    if (!input) return;
+    const ok = await invoke<boolean>("verify_admin_password", { password: input });
+    if (ok) {
+      localStorage.setItem("sakura_admin_unlocked", "true");
+      setMsg("✅ Unlocked! Shield icon appeared in sidebar.");
+      // Force storage event for sidebar
+      window.dispatchEvent(new Event("storage"));
+    } else {
+      setMsg("❌ Wrong password");
+    }
+    setInput("");
+    setTimeout(() => setMsg(""), 3000);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="password"
+        placeholder="🔑 Admin unlock"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
+        className="sakura-input text-xs py-1 px-2 w-40"
+      />
+      <button onClick={handleUnlock} className="sakura-btn-ghost text-xs px-2 py-1">
+        Unlock
+      </button>
+      {msg && <span className="text-xs" style={{ color: msg.startsWith("✅") ? "#4ade80" : "#f87171" }}>{msg}</span>}
+    </div>
   );
 }

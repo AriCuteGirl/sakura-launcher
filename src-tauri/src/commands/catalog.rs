@@ -237,3 +237,30 @@ pub async fn fetch_catalog(app: tauri::AppHandle, base_url: String) -> Result<Ca
 
     Ok(Catalog { games })
 }
+
+/// Fetch a catalog.json from a remote URL (e.g. GitHub Pages, Filen.io public link)
+#[tauri::command]
+pub async fn fetch_remote_catalog(url: String) -> Result<Catalog, String> {
+    if url.trim().is_empty() {
+        return Err("Catalog URL is not configured. Go to Settings → Catalog URL.".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch catalog: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Catalog server returned HTTP {}", resp.status()));
+    }
+
+    resp.json::<Catalog>()
+        .await
+        .map_err(|e| format!("Failed to parse catalog JSON: {e}"))
+}

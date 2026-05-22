@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LayoutGrid, List, SortAsc, Play, FolderOpen, Edit, Trash2, ScanSearch, Scan } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { open as openFolder } from "@tauri-apps/plugin-shell";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import GameCard from "../components/GameCard";
@@ -39,7 +40,31 @@ export default function Library() {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [rawgCovers, setRawgCovers] = useState<Record<string, string>>({});
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Auto-fetch RAWG covers for games without cover_url
+  useEffect(() => {
+    (async () => {
+      try {
+        const settings = await invoke<any>("load_settings");
+        if (!settings?.rawg_api_key) return;
+        for (const g of games) {
+          if (!g.cover_url && !rawgCovers[g.id]) {
+            try {
+              const meta = await invoke<any>("fetch_game_metadata", {
+                title: g.title,
+                rawgApiKey: settings.rawg_api_key,
+              });
+              if (meta?.cover_url) {
+                setRawgCovers(prev => ({ ...prev, [g.id]: meta.cover_url! }));
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    })();
+  }, [games.length]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -268,7 +293,7 @@ export default function Library() {
                   {filtered.map((game) => (
                     <GameCard
                       key={game.id}
-                      game={game}
+                      game={{ ...game, cover_url: rawgCovers[game.id] || game.cover_url }}
                       view="grid"
                       onContextMenu={handleContextMenu}
                     />
@@ -281,7 +306,7 @@ export default function Library() {
                   {filtered.map((game) => (
                     <GameCard
                       key={game.id}
-                      game={game}
+                      game={{ ...game, cover_url: rawgCovers[game.id] || game.cover_url }}
                       view="list"
                       onContextMenu={handleContextMenu}
                     />

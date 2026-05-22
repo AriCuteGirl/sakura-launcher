@@ -8,3 +8,6 @@ pub mod metadata;
 pub mod playtime;
 pub mod scanner;
 pub mod settings;
+pub mod webdav;
+pub mod catalog_manager;
+pub mod s3;

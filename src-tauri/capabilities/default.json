@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for Sakura Launcher",
-  "windows": ["main"],
+  "windows": ["main", "filen-dl-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -12,6 +12,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "core:window:allow-is-maximized",
+    "core:window:allow-create",
+    "core:window:allow-set-focus",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
@@ -26,6 +28,8 @@
     "shell:default",
     "shell:allow-open",
     "shell:allow-execute",
+    "opener:default",
+    "opener:allow-open-url",
     "dialog:default",
     "fs:default"
   ]

@@ -11,6 +11,7 @@ import EditGame from "./pages/AddGame";
 import Achievements from "./pages/Achievements";
 import Friends from "./pages/Friends";
 import Settings from "./pages/Settings";
+import Admin from "./pages/Admin";
 import { useGameStore } from "./store/useGameStore";
 import { listen } from "@tauri-apps/api/event";
 
@@ -114,6 +115,7 @@ export default function App() {
                 <Route path="/achievements" element={<Achievements />} />
                 <Route path="/friends" element={<Friends />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/admin" element={<Admin />} />
               </Routes>
             </AnimatePresence>
           </main>
