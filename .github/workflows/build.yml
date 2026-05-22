@@ -32,6 +32,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -65,6 +68,9 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
